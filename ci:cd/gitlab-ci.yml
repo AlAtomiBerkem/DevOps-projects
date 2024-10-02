@@ -1,0 +1,77 @@
+stages:
+  - build
+  - style
+  - test
+  - deploy
+
+.notify: &notify
+  - |
+    REMOTE_SERVER="192.168.10.2"
+    REMOTE_USER="deploy"
+    BOT_TOKEN="7498327782:AAGUTc8Y5MaqKWbTniqAAR8j0UBXpJ7ejAI"
+    CHAT_ID="232500514"
+    API_URL="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
+    MESSAGE=$(if [[ "$CI_JOB_STATUS" =~ "failed" ]]; then echo "$CI_JOB_STAGE stage: sorry"; else echo "$CI_JOB_STAGE stage: ura!"; fi)
+    ssh "$REMOTE_USER"@"$REMOTE_SERVER" "curl -s -X POST $API_URL -d chat_id=$CHAT_ID -d text=\"$MESSAGE\"" > "/dev/null"
+
+build-job:
+  stage: build
+  tags:
+    - build
+  script:
+    - cd src/cat
+    - make s21_cat
+    - cd ../grep
+    - make s21_grep
+  artifacts:
+    paths:
+      - src/cat/s21_cat
+      - src/grep/s21_grep
+    expire_in: 30 days
+  after_script:
+    - *notify
+
+style-job:
+  stage: style
+  tags:
+    - style
+  script:
+    - |
+        OUTPUT=$(clang-format -n src/cat/*.c src/cat/*.h src/grep/*.c src/grep/*.h 2>&1)
+        if echo "$OUTPUT" | grep -qE "(warning|error)"
+        then
+            exit 1
+        fi
+        exit 0
+  after_script:
+    - *notify
+
+test-job:
+  stage: test
+  tags:
+    - test
+  script:
+    - |
+      cd src/cat
+      OUTPUT1=$(./test_cat.sh | grep "FAIL: 0")
+      cd ../grep
+      OUTPUT2=$(./test.sh | grep "FAIL: 0")
+      if ! ( echo "$OUTPUT1" | grep "FAIL: 0" && echo "$OUTPUT2" | grep "FAIL: 0" )
+        then
+            exit 1
+      fi
+      exit 0
+  when: on_success
+  after_script:
+    - *notify
+
+deploy-job:
+  stage: deploy
+  tags:
+    - deploy
+  script:
+    - scp src/cat/s21_cat deploy@192.168.10.2:/usr/local/bin
+    - scp src/grep/s21_grep deploy@192.168.10.2:/usr/local/bin
+  when: manual
+  after_script:
+    - *notify    
